@@ -343,7 +343,7 @@
   <div class="ad-modal-overlay" id="adModalOverlay" onclick="if(event.target===this) closeAdModal()">
     <div class="ad-modal-card">
       <button class="ad-modal-close" onclick="closeAdModal()" aria-label="닫기">✕</button>
-      <div class="ad-modal-label">기록 완료! 💧</div>
+      <div class="ad-modal-label" id="adModalLabel">기록 완료! 💧</div>
       <div id="coupangAdSlot">
         <script src="https://ads-partners.coupang.com/g.js"></script>
         <script>
@@ -537,7 +537,7 @@ function saveCupModal(){
   saveQuickButtons();
   renderQuickButtons();
   closeCupModal();
-  openAdModal();
+  openAdModal('설정 완료! 🥛');
 }
 function deleteCupModal(){
   if(activeSlotIndex === null) return;
@@ -762,7 +762,8 @@ async function renderCalendar(){
   }
 }
 
-function openAdModal(){
+function openAdModal(label){
+  document.getElementById('adModalLabel').textContent = label || '기록 완료! 💧';
   document.getElementById('adModalOverlay').classList.add('active');
 }
 function closeAdModal(){
