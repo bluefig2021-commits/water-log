@@ -159,12 +159,20 @@
   .custom-row input{ flex:1; border:1px solid var(--panel-line); border-radius:14px; padding:11px 12px; font-size:0.9rem; background:var(--overlay-input); color:var(--ink); }
   .custom-row button{ background:var(--holo-2); color:#ffffff; border:none; border-radius:14px; padding:0 18px; font-weight:700; cursor:pointer; font-size:0.82rem; }
 
-  .entries-list{ margin-top:14px; display:flex; flex-direction:column; gap:6px; max-height:160px; overflow-y:auto; }
+  .entries-list{ margin-top:14px; display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; }
   .entries-empty{ text-align:center; font-size:0.75rem; color:var(--ink-dim); padding:8px 0; }
-  .entry-row{ display:flex; align-items:center; justify-content:space-between; background:var(--overlay-1); border-radius:10px; padding:7px 10px; font-size:0.78rem; }
+  .entry-row{ display:flex; align-items:center; justify-content:space-between; background:var(--overlay-1); border-radius:10px; padding:7px 10px; font-size:0.78rem; transition:opacity .2s ease; }
+  .entry-row.deleted{ opacity:0.55; }
   .entry-row .entry-info{ display:flex; gap:8px; align-items:center; color:var(--ink); }
-  .entry-row .entry-time{ color:var(--ink-dim); font-variant-numeric:tabular-nums; }
+  .entry-row.deleted .entry-info{ text-decoration:line-through; }
+  .entry-row .entry-time{ color:var(--ink-dim); font-variant-numeric:tabular-nums; cursor:pointer; border-bottom:1px dotted var(--ink-dim); }
+  .entry-row .entry-time:hover{ color:var(--holo-2); border-color:var(--holo-2); }
+  .entry-row .time-edit-input{
+    font-size:0.76rem; font-family:inherit; color:var(--ink); background:var(--overlay-input);
+    border:1px solid var(--holo-2); border-radius:6px; padding:1px 4px; width:78px;
+  }
   .entry-row .entry-del{ background:none; border:none; color:var(--danger); cursor:pointer; font-size:0.85rem; padding:2px 6px; }
+  .entry-row .entry-restore{ background:none; border:none; color:var(--holo-2); cursor:pointer; font-size:0.72rem; font-weight:700; padding:2px 6px; white-space:nowrap; }
 
   .footer-actions{ display:flex; justify-content:space-between; margin-top:16px; padding-top:12px; border-top:1px solid var(--panel-line); }
   .link-btn{ background:none; border:none; cursor:pointer; font-size:0.7rem; color:var(--ink-dim); font-weight:500; padding:4px; }
@@ -448,6 +456,7 @@ let lastDrinkTime = null;
 let overdueAlerted = false;
 let quickButtons = [null, null, null, null];
 let activeSlotIndex = null;
+let editingTimeId = null;
 
 /* ---- 테마 ---- */
 function applyTheme(theme){
@@ -549,12 +558,14 @@ async function saveLastDrinkTime(){
   else { await storage.delete('lastDrinkTime'); }
 }
 
+/* 오늘 남아있는(삭제되지 않은) 기록들 중 가장 최근 시간으로 타이머를 재계산 */
 async function recalcTimerFromToday(){
   const todays = await loadDayEntries(rY, rM, rD);
-  if(todays.length === 0){
+  const active = todays.filter(e=>!e.deleted);
+  if(active.length === 0){
     lastDrinkTime = null;
   } else {
-    const maxTime = todays.reduce((max, e)=> new Date(e.time) > max ? new Date(e.time) : max, new Date(0));
+    const maxTime = active.reduce((max, e)=> new Date(e.time) > max ? new Date(e.time) : max, new Date(0));
     lastDrinkTime = maxTime;
   }
   overdueAlerted = false;
@@ -613,7 +624,8 @@ async function saveDayEntries(y,m,d, arr){
   entriesCache[k] = arr;
   if(arr.length === 0){ await storage.delete(k); }
   else { await storage.set(k, JSON.stringify(arr)); }
-  const total = arr.reduce((sum,e)=> sum + e.ml, 0);
+  // 월별 합계 (삭제(보류)된 기록은 합계에서 제외)
+  const total = arr.reduce((sum,e)=> sum + (e.deleted ? 0 : e.ml), 0);
   const month = await loadMonth(y,m);
   if(total > 0) month[d] = total; else delete month[d];
   await saveMonth(y,m,month);
@@ -638,7 +650,7 @@ async function render(){
   document.getElementById('goalText').innerText = `/ ${GOAL.toLocaleString()} ml 목표`;
 
   const entries = await loadDayEntries(vY, vM, vD);
-  const amt = entries.reduce((sum,e)=> sum + e.ml, 0);
+  const amt = entries.reduce((sum,e)=> sum + (e.deleted ? 0 : e.ml), 0);
 
   document.getElementById('totalAmt').innerText = amt.toLocaleString();
   const pct = Math.min((amt/GOAL)*100, 100);
@@ -665,14 +677,38 @@ function renderEntriesList(entries){
   const sorted = [...entries].sort((a,b)=> new Date(a.time) - new Date(b.time));
   sorted.forEach(e=>{
     const row = document.createElement('div');
-    row.className = 'entry-row';
+    row.className = 'entry-row' + (e.deleted ? ' deleted' : '');
     const t = new Date(e.time);
     const timeStr = `${pad2(t.getHours())}:${pad2(t.getMinutes())}`;
+
+    const isEditing = (editingTimeId === e.id) && !e.deleted;
+    const timeHtml = isEditing
+      ? `<input type="time" class="time-edit-input" value="${timeStr}">`
+      : `<span class="entry-time">${timeStr}</span>`;
+
+    const actionHtml = e.deleted
+      ? `<button class="entry-restore">↺ 되돌리기</button>`
+      : `<button class="entry-del">✕</button>`;
+
     row.innerHTML = `
-      <div class="entry-info"><span class="entry-time">${timeStr}</span><span>${escapeHtml(e.label||'기록')} · ${e.ml}ml</span></div>
-      <button class="entry-del" title="삭제">✕</button>
+      <div class="entry-info">${timeHtml}<span>${escapeHtml(e.label||'기록')} · ${e.ml}ml</span></div>
+      ${actionHtml}
     `;
-    row.querySelector('.entry-del').onclick = ()=> deleteEntry(e.id);
+
+    if(!e.deleted){
+      if(isEditing){
+        const inp = row.querySelector('.time-edit-input');
+        inp.onchange = (ev)=> commitTimeEdit(e.id, ev.target.value);
+        inp.onblur = (ev)=> commitTimeEdit(e.id, ev.target.value);
+        setTimeout(()=>{ inp.focus(); }, 0);
+      } else {
+        row.querySelector('.entry-time').onclick = ()=>{ editingTimeId = e.id; renderEntriesList(entries); };
+      }
+      row.querySelector('.entry-del').onclick = ()=> softDeleteEntry(e.id);
+    } else {
+      row.querySelector('.entry-restore').onclick = ()=> restoreEntry(e.id);
+    }
+
     list.appendChild(row);
   });
 }
@@ -713,14 +749,14 @@ function closeAdModal(){
   document.getElementById('adModalOverlay').classList.remove('active');
 }
 
-/* ---- 물 추가/삭제 ---- */
+/* ---- 물 추가 ---- */
 async function addWater(ml, label){
   const entries = await loadDayEntries(vY, vM, vD);
-  const entry = { id: Date.now()+'-'+Math.random().toString(36).slice(2,7), ml, time: new Date().toISOString(), label: label || '직접입력' };
+  const entry = { id: Date.now()+'-'+Math.random().toString(36).slice(2,7), ml, time: new Date().toISOString(), label: label || '직접입력', deleted:false };
   entries.push(entry);
   await saveDayEntries(vY, vM, vD, entries);
 
-  const total = entries.reduce((s,e)=>s+e.ml,0);
+  const total = entries.reduce((s,e)=>s+(e.deleted?0:e.ml),0);
   const before = total - ml;
   if(total >= GOAL && before < GOAL){
     setTimeout(()=> alert(`🎉 ${vM+1}월 ${vD}일 목표 달성! 오늘도 수고했어요.`), 150);
@@ -739,10 +775,40 @@ function addCustom(){
   addWater(v, '직접입력');
 }
 
-async function deleteEntry(id){
+/* ---- 개별 기록 삭제(보류) / 되돌리기 ---- */
+async function softDeleteEntry(id){
   const entries = await loadDayEntries(vY, vM, vD);
-  const filtered = entries.filter(e=> e.id !== id);
-  await saveDayEntries(vY, vM, vD, filtered);
+  const entry = entries.find(e=> e.id === id);
+  if(!entry) return;
+  entry.deleted = true;
+  editingTimeId = null;
+  await saveDayEntries(vY, vM, vD, entries);
+  if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
+  render();
+}
+async function restoreEntry(id){
+  const entries = await loadDayEntries(vY, vM, vD);
+  const entry = entries.find(e=> e.id === id);
+  if(!entry) return;
+  entry.deleted = false;
+  await saveDayEntries(vY, vM, vD, entries);
+  if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
+  render();
+}
+
+/* ---- 개별 기록 시간 수정 ---- */
+async function commitTimeEdit(id, hhmm){
+  editingTimeId = null;
+  if(!hhmm){ render(); return; }
+  const [hh, mm] = hhmm.split(':').map(Number);
+  if(Number.isNaN(hh) || Number.isNaN(mm)){ render(); return; }
+  const entries = await loadDayEntries(vY, vM, vD);
+  const entry = entries.find(e=> e.id === id);
+  if(!entry){ render(); return; }
+  const old = new Date(entry.time);
+  const newDate = new Date(vY, vM, vD, hh, mm, old.getSeconds());
+  entry.time = newDate.toISOString();
+  await saveDayEntries(vY, vM, vD, entries);
   if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
   render();
 }
