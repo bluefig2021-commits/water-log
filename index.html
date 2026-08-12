@@ -344,12 +344,7 @@
     <div class="ad-modal-card">
       <button class="ad-modal-close" onclick="closeAdModal()" aria-label="닫기">✕</button>
       <div class="ad-modal-label" id="adModalLabel">기록 완료! 💧</div>
-      <div id="coupangAdSlot">
-        <script src="https://ads-partners.coupang.com/g.js"></script>
-        <script>
-          new PartnersCoupang.G({"id":1014650,"template":"carousel","trackingCode":"AF3470096","width":"300","height":"250","tsource":""});
-        </script>
-      </div>
+      <div id="coupangAdSlot"></div>
       <div class="ad-disclosure">이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</div>
     </div>
   </div>
@@ -410,10 +405,7 @@ auth.onAuthStateChanged(async (user) => {
     document.getElementById('userName').textContent = user.displayName || user.email.split('@')[0];
     loginScreen.classList.remove('active');
     appScreen.style.display = 'flex';
-    await loadTheme();
-    await loadSettings();
-    await loadQuickButtons();
-    await loadLastDrinkTime();
+    await Promise.all([loadTheme(), loadSettings(), loadQuickButtons(), loadLastDrinkTime()]);
     tickTimer();
     setInterval(tickTimer, 1000);
     await render();
@@ -450,8 +442,11 @@ const storage = {
   }
 };
 
-const today = new Date();
-const rY = today.getFullYear(), rM = today.getMonth(), rD = today.getDate();
+let rY, rM, rD;
+{
+  const t = new Date();
+  rY = t.getFullYear(); rM = t.getMonth(); rD = t.getDate();
+}
 let vY = rY, vM = rM, vD = rD;
 let GOAL = 2000;
 let monthCache = {};
@@ -461,6 +456,30 @@ let overdueAlerted = false;
 let quickButtons = [null, null, null, null];
 let activeSlotIndex = null;
 let editingTimeId = null;
+let isAdding = false; // 연타(더블클릭) 방지용
+
+/* 저장 관련 작업을 한 번에 하나씩만 처리하도록 직렬화 (동시에 여러 번 클릭해도 데이터가 안 꼬이게) */
+let opChain = Promise.resolve();
+function serialize(fn){
+  const result = opChain.then(fn, fn);
+  opChain = result.catch(()=>{});
+  return result;
+}
+
+/* 자정을 넘겨서 탭을 계속 켜놨을 경우, "오늘" 날짜가 실제 날짜와 어긋나는 걸 방지 */
+function checkDateRollover(){
+  const now = new Date();
+  const ny = now.getFullYear(), nm = now.getMonth(), nd = now.getDate();
+  if(ny !== rY || nm !== rM || nd !== rD){
+    const wasViewingToday = (vY === rY && vM === rM && vD === rD);
+    rY = ny; rM = nm; rD = nd;
+    if(wasViewingToday){
+      vY = rY; vM = rM; vD = rD;
+      recalcTimerFromToday();
+    }
+    render();
+  }
+}
 
 /* ---- 테마 ---- */
 function applyTheme(theme){
@@ -579,6 +598,7 @@ async function recalcTimerFromToday(){
 }
 function pad2(n){ return String(n).padStart(2,'0'); }
 function tickTimer(){
+  checkDateRollover();
   const banner = document.getElementById('timerBanner');
   const icon = document.getElementById('timerIcon');
   const text = document.getElementById('timerText');
@@ -762,9 +782,23 @@ async function renderCalendar(){
   }
 }
 
+let adScriptLoaded = false;
+function ensureAdScriptLoaded(){
+  if(adScriptLoaded) return;
+  adScriptLoaded = true;
+  const s = document.createElement('script');
+  s.src = 'https://ads-partners.coupang.com/g.js';
+  s.onload = ()=>{
+    try{
+      new PartnersCoupang.G({"id":1014650,"template":"carousel","trackingCode":"AF3470096","width":"300","height":"250","tsource":""});
+    }catch(e){}
+  };
+  document.getElementById('coupangAdSlot').appendChild(s);
+}
 function openAdModal(label){
   document.getElementById('adModalLabel').textContent = label || '기록 완료! 💧';
   document.getElementById('adModalOverlay').classList.add('active');
+  ensureAdScriptLoaded();
 }
 function closeAdModal(){
   document.getElementById('adModalOverlay').classList.remove('active');
@@ -772,20 +806,28 @@ function closeAdModal(){
 
 /* ---- 물 추가 ---- */
 async function addWater(ml, label){
-  const entries = await loadDayEntries(vY, vM, vD);
-  const entry = { id: Date.now()+'-'+Math.random().toString(36).slice(2,7), ml, time: new Date().toISOString(), label: label || '직접입력', deleted:false };
-  entries.push(entry);
-  await saveDayEntries(vY, vM, vD, entries);
+  if(isAdding) return; // 연타(더블클릭) 방지: 처리 중이면 무시
+  isAdding = true;
+  try{
+    await serialize(async ()=>{
+      const entries = await loadDayEntries(vY, vM, vD);
+      const entry = { id: Date.now()+'-'+Math.random().toString(36).slice(2,7), ml, time: new Date().toISOString(), label: label || '직접입력', deleted:false };
+      entries.push(entry);
+      await saveDayEntries(vY, vM, vD, entries);
 
-  const total = entries.reduce((s,e)=>s+(e.deleted?0:e.ml),0);
-  const before = total - ml;
-  if(total >= GOAL && before < GOAL){
-    setTimeout(()=> alert(`🎉 ${vM+1}월 ${vD}일 목표 달성! 오늘도 수고했어요.`), 150);
+      const total = entries.reduce((s,e)=>s+(e.deleted?0:e.ml),0);
+      const before = total - ml;
+      if(total >= GOAL && before < GOAL){
+        setTimeout(()=> alert(`🎉 ${vM+1}월 ${vD}일 목표 달성! 오늘도 수고했어요.`), 150);
+      }
+
+      if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
+      render();
+      openAdModal();
+    });
+  } finally {
+    isAdding = false;
   }
-
-  if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
-  render();
-  openAdModal();
 }
 
 function addCustom(){
@@ -797,41 +839,47 @@ function addCustom(){
 }
 
 /* ---- 개별 기록 삭제(보류) / 되돌리기 ---- */
-async function softDeleteEntry(id){
-  const entries = await loadDayEntries(vY, vM, vD);
-  const entry = entries.find(e=> e.id === id);
-  if(!entry) return;
-  entry.deleted = true;
-  editingTimeId = null;
-  await saveDayEntries(vY, vM, vD, entries);
-  if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
-  render();
+function softDeleteEntry(id){
+  return serialize(async ()=>{
+    const entries = await loadDayEntries(vY, vM, vD);
+    const entry = entries.find(e=> e.id === id);
+    if(!entry) return;
+    entry.deleted = true;
+    editingTimeId = null;
+    await saveDayEntries(vY, vM, vD, entries);
+    if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
+    render();
+  });
 }
-async function restoreEntry(id){
-  const entries = await loadDayEntries(vY, vM, vD);
-  const entry = entries.find(e=> e.id === id);
-  if(!entry) return;
-  entry.deleted = false;
-  await saveDayEntries(vY, vM, vD, entries);
-  if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
-  render();
+function restoreEntry(id){
+  return serialize(async ()=>{
+    const entries = await loadDayEntries(vY, vM, vD);
+    const entry = entries.find(e=> e.id === id);
+    if(!entry) return;
+    entry.deleted = false;
+    await saveDayEntries(vY, vM, vD, entries);
+    if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
+    render();
+  });
 }
 
 /* ---- 개별 기록 시간 수정 ---- */
-async function commitTimeEdit(id, hhmm){
-  editingTimeId = null;
-  if(!hhmm){ render(); return; }
-  const [hh, mm] = hhmm.split(':').map(Number);
-  if(Number.isNaN(hh) || Number.isNaN(mm)){ render(); return; }
-  const entries = await loadDayEntries(vY, vM, vD);
-  const entry = entries.find(e=> e.id === id);
-  if(!entry){ render(); return; }
-  const old = new Date(entry.time);
-  const newDate = new Date(vY, vM, vD, hh, mm, old.getSeconds());
-  entry.time = newDate.toISOString();
-  await saveDayEntries(vY, vM, vD, entries);
-  if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
-  render();
+function commitTimeEdit(id, hhmm){
+  return serialize(async ()=>{
+    editingTimeId = null;
+    if(!hhmm){ render(); return; }
+    const [hh, mm] = hhmm.split(':').map(Number);
+    if(Number.isNaN(hh) || Number.isNaN(mm)){ render(); return; }
+    const entries = await loadDayEntries(vY, vM, vD);
+    const entry = entries.find(e=> e.id === id);
+    if(!entry){ render(); return; }
+    const old = new Date(entry.time);
+    const newDate = new Date(vY, vM, vD, hh, mm, old.getSeconds());
+    entry.time = newDate.toISOString();
+    await saveDayEntries(vY, vM, vD, entries);
+    if(vY===rY && vM===rM && vD===rD){ await recalcTimerFromToday(); }
+    render();
+  });
 }
 
 async function resetSelectedDay(){
