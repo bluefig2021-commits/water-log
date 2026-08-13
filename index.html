@@ -217,7 +217,22 @@
     display:flex; align-items:center; justify-content:center;
   }
   .ad-modal-label{ font-weight:800; font-size:0.95rem; color:var(--ink); margin-bottom:14px; }
-  #coupangAdSlot{ display:flex; justify-content:center; min-height:250px; align-items:center; }
+  #coupangAdSlot{
+    display:flex; justify-content:center; align-items:center;
+    width:300px; height:250px; max-width:100%;
+    margin:0 auto; position:relative; overflow:hidden;
+    border-radius:10px;
+  }
+  /* 쿠팡 위젯이 내부에 만드는 iframe/div가 팝업 밖으로 새지 않도록 강제로 가둠 */
+  #coupangAdSlot iframe,
+  #coupangAdSlot > div,
+  #coupangAdSlot > ins{
+    position:relative !important;
+    top:0 !important; left:0 !important; right:auto !important; bottom:auto !important;
+    max-width:100% !important; max-height:100% !important;
+    width:300px !important; height:250px !important;
+    margin:0 !important;
+  }
   .ad-disclosure{ font-size:0.66rem; color:var(--ink-dim); margin-top:12px; line-height:1.4; }
 
   .modal-form{ display:flex; flex-direction:column; gap:14px; text-align:left; margin-top:10px; }
@@ -344,7 +359,12 @@
     <div class="ad-modal-card">
       <button class="ad-modal-close" onclick="closeAdModal()" aria-label="닫기">✕</button>
       <div class="ad-modal-label" id="adModalLabel">기록 완료! 💧</div>
-      <div id="coupangAdSlot"></div>
+      <div id="coupangAdSlot">
+        <script src="https://ads-partners.coupang.com/g.js"></script>
+        <script>
+          new PartnersCoupang.G({"id":1014650,"template":"carousel","trackingCode":"AF3470096","width":"300","height":"250","tsource":""});
+        </script>
+      </div>
       <div class="ad-disclosure">이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</div>
     </div>
   </div>
@@ -782,23 +802,9 @@ async function renderCalendar(){
   }
 }
 
-let adScriptLoaded = false;
-function ensureAdScriptLoaded(){
-  if(adScriptLoaded) return;
-  adScriptLoaded = true;
-  const s = document.createElement('script');
-  s.src = 'https://ads-partners.coupang.com/g.js';
-  s.onload = ()=>{
-    try{
-      new PartnersCoupang.G({"id":1014650,"template":"carousel","trackingCode":"AF3470096","width":"300","height":"250","tsource":""});
-    }catch(e){}
-  };
-  document.getElementById('coupangAdSlot').appendChild(s);
-}
 function openAdModal(label){
   document.getElementById('adModalLabel').textContent = label || '기록 완료! 💧';
   document.getElementById('adModalOverlay').classList.add('active');
-  ensureAdScriptLoaded();
 }
 function closeAdModal(){
   document.getElementById('adModalOverlay').classList.remove('active');
