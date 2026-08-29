@@ -411,19 +411,14 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const db = firebase.firestore();
 const auth = firebase.auth();
-const COLLECTION = 'waterlog';
-let ALLOWED_UID = localStorage.getItem('allowedUID') || null;
+let currentUserRef = null; // 로그인한 사용자별 전용 문서 경로
 
 auth.onAuthStateChanged(async (user) => {
   const loginScreen = document.getElementById('loginScreen');
   const appScreen = document.getElementById('appScreen');
   if(user){
-    if(!ALLOWED_UID){ ALLOWED_UID = user.uid; localStorage.setItem('allowedUID', user.uid); }
-    if(user.uid !== ALLOWED_UID){
-      alert('이 앱은 특정 사용자만 사용할 수 있습니다.');
-      auth.signOut();
-      return;
-    }
+    // 사용자마다 자기만의 데이터 폴더(users/{내 uid}/waterlog/...)를 사용 - 서로 안 섞임
+    currentUserRef = db.collection('users').doc(user.uid).collection('waterlog');
     document.getElementById('userName').textContent = user.displayName || user.email.split('@')[0];
     loginScreen.classList.remove('active');
     appScreen.style.display = 'flex';
@@ -432,6 +427,7 @@ auth.onAuthStateChanged(async (user) => {
     setInterval(tickTimer, 1000);
     await render();
   } else {
+    currentUserRef = null;
     loginScreen.classList.add('active');
     appScreen.style.display = 'none';
   }
@@ -444,22 +440,26 @@ async function signInWithGoogle(){
 }
 async function signOut(){ if(confirm('로그아웃하시겠습니까?')){ await auth.signOut(); } }
 
-/* ---- Firestore storage wrapper ---- */
+/* ---- Firestore storage wrapper (로그인한 사용자 전용 경로에만 읽고 씀) ---- */
 const storage = {
   async get(key){
-    try{ const doc = await db.collection(COLLECTION).doc(key).get(); if(!doc.exists) return null; return { key, value: doc.data().value }; }
+    if(!currentUserRef) return null;
+    try{ const doc = await currentUserRef.doc(key).get(); if(!doc.exists) return null; return { key, value: doc.data().value }; }
     catch(e){ return null; }
   },
   async set(key, value){
-    try{ await db.collection(COLLECTION).doc(key).set({ value, updatedAt: Date.now() }); return { key, value }; }
+    if(!currentUserRef) return null;
+    try{ await currentUserRef.doc(key).set({ value, updatedAt: Date.now() }); return { key, value }; }
     catch(e){ return null; }
   },
   async delete(key){
-    try{ await db.collection(COLLECTION).doc(key).delete(); return { key, deleted:true }; }
+    if(!currentUserRef) return null;
+    try{ await currentUserRef.doc(key).delete(); return { key, deleted:true }; }
     catch(e){ return null; }
   },
   async list(prefix){
-    try{ const snap = await db.collection(COLLECTION).get(); const keys = snap.docs.map(d=>d.id).filter(id=>id.startsWith(prefix)); return { keys }; }
+    if(!currentUserRef) return null;
+    try{ const snap = await currentUserRef.get(); const keys = snap.docs.map(d=>d.id).filter(id=>id.startsWith(prefix)); return { keys }; }
     catch(e){ return null; }
   }
 };
