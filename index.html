@@ -442,26 +442,65 @@ async function signInWithGoogle(){
 async function signOut(){ if(confirm('로그아웃하시겠습니까?')){ await auth.signOut(); } }
 
 /* ---- Firestore storage wrapper (로그인한 사용자 전용 경로에만 읽고 씀) ---- */
+function showStorageError(e){
+  let el = document.getElementById('errorBanner');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'errorBanner';
+    el.style.cssText = 'background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:12px;padding:10px 12px;font-size:0.75rem;line-height:1.5;word-break:break-all;';
+    const wrap = document.getElementById('appScreen');
+    wrap.insertBefore(el, wrap.firstChild);
+  }
+  const code = (e && e.code) ? e.code : '';
+  const msg = (e && e.message) ? e.message : String(e);
+  el.textContent = '⚠️ 서버 연결 문제 ' + (code ? '[' + code + '] ' : '') + msg;
+}
+function clearStorageError(){
+  const el = document.getElementById('errorBanner');
+  if(el) el.remove();
+}
+/* 서버 응답이 없으면 무한 로딩 대신 일정 시간 뒤 에러로 처리 */
+function withTimeout(p, ms){
+  return Promise.race([
+    p,
+    new Promise((_, rej)=> setTimeout(()=> rej({ code:'timeout', message:'서버 응답이 '+(ms/1000)+'초 넘게 없어요. Firebase에서 Firestore 데이터베이스가 켜져있는지 확인해 주세요.' }), ms))
+  ]);
+}
+
 const storage = {
   async get(key){
     if(!currentUserRef) return null;
-    try{ const doc = await currentUserRef.doc(key).get(); if(!doc.exists) return null; return { key, value: doc.data().value }; }
-    catch(e){ return null; }
+    try{
+      const doc = await withTimeout(currentUserRef.doc(key).get(), 8000);
+      clearStorageError();
+      if(!doc.exists) return null;
+      return { key, value: doc.data().value };
+    }catch(e){ showStorageError(e); return null; }
   },
   async set(key, value){
     if(!currentUserRef) return null;
-    try{ await currentUserRef.doc(key).set({ value, updatedAt: Date.now() }); return { key, value }; }
-    catch(e){ return null; }
+    try{
+      await withTimeout(currentUserRef.doc(key).set({ value, updatedAt: Date.now() }), 8000);
+      clearStorageError();
+      return { key, value };
+    }catch(e){ showStorageError(e); return null; }
   },
   async delete(key){
     if(!currentUserRef) return null;
-    try{ await currentUserRef.doc(key).delete(); return { key, deleted:true }; }
-    catch(e){ return null; }
+    try{
+      await withTimeout(currentUserRef.doc(key).delete(), 8000);
+      clearStorageError();
+      return { key, deleted:true };
+    }catch(e){ showStorageError(e); return null; }
   },
   async list(prefix){
     if(!currentUserRef) return null;
-    try{ const snap = await currentUserRef.get(); const keys = snap.docs.map(d=>d.id).filter(id=>id.startsWith(prefix)); return { keys }; }
-    catch(e){ return null; }
+    try{
+      const snap = await withTimeout(currentUserRef.get(), 8000);
+      clearStorageError();
+      const keys = snap.docs.map(d=>d.id).filter(id=>id.startsWith(prefix));
+      return { keys };
+    }catch(e){ showStorageError(e); return null; }
   }
 };
 
